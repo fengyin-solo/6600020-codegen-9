@@ -16,3 +16,13 @@ class Device(BaseModel):
     slave_id: int
     online: bool
     registers: List[ModbusRegister] = []
+
+class FavoriteItem(BaseModel):
+    user_id: str
+    device_id: str
+    address: int
+
+class FavoriteCreate(BaseModel):
+    user_id: str
+    device_id: str
+    address: int

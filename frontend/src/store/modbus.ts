@@ -1,6 +1,21 @@
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { defineStore } from 'pinia'
-import type { Device, Alarm, ModbusRegister } from '../types'
+import type { Device, Alarm, FavoriteItem, FavoriteRegister } from '../types'
+
+const FAVORITES_KEY = 'modbus_favorites'
+
+function loadFavorites(): FavoriteItem[] {
+  try {
+    const raw = localStorage.getItem(FAVORITES_KEY)
+    return raw ? JSON.parse(raw) : []
+  } catch {
+    return []
+  }
+}
+
+function saveFavorites(items: FavoriteItem[]) {
+  localStorage.setItem(FAVORITES_KEY, JSON.stringify(items))
+}
 
 export const useModbusStore = defineStore('modbus', () => {
   const devices = ref<Device[]>([])
@@ -9,9 +24,26 @@ export const useModbusStore = defineStore('modbus', () => {
   const isPolling = ref(false)
   const pollInterval = ref(1000)
   const selectedDevice = ref<Device | null>(null)
+  const favorites = ref<FavoriteItem[]>(loadFavorites())
+
+  watch(favorites, (val) => saveFavorites(val), { deep: true })
 
   const criticalAlarms = computed(() => alarms.value.filter(a => a.level === 'critical' && !a.acknowledged))
   const onlineDevices = computed(() => devices.value.filter(d => d.online))
+
+  const favoriteRegisters = computed<FavoriteRegister[]>(() => {
+    return favorites.value.map(fav => {
+      const dev = devices.value.find(d => d.id === fav.deviceId)
+      const reg = dev?.registers.find(r => r.address === fav.address)
+      if (!dev || !reg) return null
+      return {
+        ...reg,
+        deviceId: dev.id,
+        deviceName: dev.name,
+        isOnline: dev.online,
+      }
+    }).filter((r): r is FavoriteRegister => r !== null)
+  })
 
   function initMockDevices() {
     devices.value = [
@@ -85,6 +117,40 @@ export const useModbusStore = defineStore('modbus', () => {
     if (a) a.acknowledged = true
   }
 
+  function isFavorite(deviceId: string, address: number): boolean {
+    return favorites.value.some(f => f.deviceId === deviceId && f.address === address)
+  }
+
+  function addFavorite(deviceId: string, address: number) {
+    if (isFavorite(deviceId, address)) return
+    favorites.value.push({ deviceId, address, addedAt: Date.now() })
+  }
+
+  function removeFavorite(deviceId: string, address: number) {
+    const idx = favorites.value.findIndex(f => f.deviceId === deviceId && f.address === address)
+    if (idx !== -1) favorites.value.splice(idx, 1)
+  }
+
+  function toggleFavorite(deviceId: string, address: number) {
+    if (isFavorite(deviceId, address)) {
+      removeFavorite(deviceId, address)
+    } else {
+      addFavorite(deviceId, address)
+    }
+  }
+
+  function moveFavorite(deviceId: string, address: number, direction: -1 | 1) {
+    const idx = favorites.value.findIndex(f => f.deviceId === deviceId && f.address === address)
+    const target = idx + direction
+    if (idx === -1 || target < 0 || target >= favorites.value.length) return
+    const arr = favorites.value
+    ;[arr[idx], arr[target]] = [arr[target], arr[idx]]
+  }
+
+  function clearFavorites() {
+    favorites.value = []
+  }
+
   function toggleDevice(id: string) {
     const d = devices.value.find(d => d.id === id)
     if (d) d.online = !d.online
@@ -92,7 +158,9 @@ export const useModbusStore = defineStore('modbus', () => {
 
   return {
     devices, alarms, historyData, isPolling, pollInterval, selectedDevice,
+    favorites, favoriteRegisters,
     criticalAlarms, onlineDevices,
-    initMockDevices, simulatePoll, acknowledgeAlarm, toggleDevice
+    initMockDevices, simulatePoll, acknowledgeAlarm, toggleDevice,
+    isFavorite, addFavorite, removeFavorite, toggleFavorite, moveFavorite, clearFavorites
   }
 })

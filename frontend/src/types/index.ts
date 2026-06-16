@@ -26,3 +26,15 @@ export interface Alarm {
   timestamp: number
   acknowledged: boolean
 }
+
+export interface FavoriteItem {
+  deviceId: string
+  address: number
+  addedAt: number
+}
+
+export interface FavoriteRegister extends ModbusRegister {
+  deviceId: string
+  deviceName: string
+  isOnline: boolean
+}
