@@ -27,10 +27,17 @@ export interface Alarm {
   acknowledged: boolean
 }
 
+export interface User {
+  userId: string
+  displayName: string
+  role: string
+}
+
 export interface FavoriteItem {
+  userId: string
   deviceId: string
   address: number
-  addedAt: number
+  order: number
 }
 
 export interface FavoriteRegister extends ModbusRegister {

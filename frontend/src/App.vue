@@ -3,6 +3,20 @@
     <!-- Sidebar -->
     <div class="w-64 bg-gray-900 p-4 flex flex-col gap-3 border-r border-gray-800 overflow-y-auto">
       <h1 class="text-lg font-bold text-orange-400">Modbus 工业监控</h1>
+
+      <!-- User Selector -->
+      <div class="bg-gray-800 rounded p-2">
+        <label class="text-gray-400 text-xs block mb-1">值班人员</label>
+        <select v-if="store.users.length" v-model="selectedUserId" @change="onUserChange"
+          class="w-full bg-gray-700 text-sm rounded px-2 py-1.5 text-gray-200 border border-gray-600 focus:border-orange-500 focus:outline-none">
+          <option value="" disabled>选择身份...</option>
+          <option v-for="u in store.users" :key="u.userId" :value="u.userId">
+            {{ u.displayName }}（{{ u.role }}）
+          </option>
+        </select>
+        <div v-else class="text-xs text-gray-500">加载人员列表...</div>
+      </div>
+
       <div class="flex gap-2">
         <button @click="startPoll" :disabled="store.isPolling" class="flex-1 bg-green-700 py-1.5 rounded text-xs hover:bg-green-600 disabled:opacity-50">
           {{ store.isPolling ? '采集中...' : '开始采集' }}
@@ -41,12 +55,20 @@
 
     <!-- Main Dashboard -->
     <div class="flex-1 flex flex-col gap-3 p-4 overflow-y-auto">
+      <!-- No user selected prompt -->
+      <div v-if="!store.currentUser" class="bg-gray-800/50 rounded-xl p-6 border border-dashed border-gray-600 text-center">
+        <svg class="w-10 h-10 mx-auto text-gray-500 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z"/>
+        </svg>
+        <p class="text-gray-400 text-sm">请在左侧选择值班身份，以查看和保存个人收藏指标</p>
+      </div>
+
       <!-- Favorites Section -->
-      <div v-if="store.favoriteRegisters.length" class="bg-gray-800/50 rounded-xl p-3 border border-orange-500/20">
+      <div v-else-if="store.favoriteRegisters.length" class="bg-gray-800/50 rounded-xl p-3 border border-orange-500/20">
         <div class="flex items-center justify-between mb-2">
           <h3 class="text-sm text-orange-400 font-bold flex items-center gap-1.5">
             <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/></svg>
-            我的收藏
+            {{ store.currentUser.displayName }}的收藏
           </h3>
           <button @click="store.clearFavorites()" class="text-xs text-gray-500 hover:text-red-400 transition-colors">
             清空收藏
@@ -72,12 +94,17 @@
         </div>
       </div>
 
+      <!-- Empty favorites hint -->
+      <div v-else class="bg-gray-800/30 rounded-xl p-4 border border-dashed border-gray-700 text-center">
+        <p class="text-gray-500 text-sm">点击指标卡片上的 ⭐ 添加常看指标到个人收藏</p>
+      </div>
+
       <!-- Register Gauges -->
       <div class="grid grid-cols-4 gap-3">
         <template v-for="d in store.devices" :key="d.id">
           <div v-for="r in d.registers" :key="`${d.id}_${r.address}`"
             class="bg-gray-900 rounded-xl p-3 relative group">
-            <button @click="store.toggleFavorite(d.id, r.address)"
+            <button v-if="store.currentUser" @click="store.toggleFavorite(d.id, r.address)"
               class="absolute top-2 right-2 w-5 h-5 flex items-center justify-center transition-colors"
               :class="store.isFavorite(d.id, r.address) ? 'text-orange-400' : 'text-gray-600 hover:text-orange-400 opacity-0 group-hover:opacity-100'">
               <svg class="w-4 h-4" :fill="store.isFavorite(d.id, r.address) ? 'currentColor' : 'none'" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
@@ -119,12 +146,19 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useModbusStore } from './store/modbus'
 import TrendChart from './components/TrendChart.vue'
 
 const store = useModbusStore()
 let timer: number | null = null
+
+const selectedUserId = ref('')
+
+function onUserChange() {
+  const user = store.users.find(u => u.userId === selectedUserId.value)
+  if (user) store.selectUser(user)
+}
 
 function startPoll() {
   store.isPolling = true
@@ -136,6 +170,12 @@ function stopPoll() {
   if (timer) { clearInterval(timer); timer = null }
 }
 
-onMounted(() => store.initMockDevices())
+onMounted(async () => {
+  store.initMockDevices()
+  await store.fetchUsers()
+  if (store.currentUser) {
+    selectedUserId.value = store.currentUser.userId
+  }
+})
 onUnmounted(() => stopPoll())
 </script>

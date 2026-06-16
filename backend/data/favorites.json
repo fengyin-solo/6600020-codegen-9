@@ -1,0 +1,16 @@
+{
+  "zhangwei": [
+    {
+      "user_id": "zhangwei",
+      "device_id": "dev2",
+      "address": 1,
+      "order": 0
+    },
+    {
+      "user_id": "zhangwei",
+      "device_id": "dev1",
+      "address": 0,
+      "order": 1
+    }
+  ]
+}

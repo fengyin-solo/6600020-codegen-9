@@ -1,21 +1,10 @@
-import { ref, computed, watch } from 'vue'
+import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
-import type { Device, Alarm, FavoriteItem, FavoriteRegister } from '../types'
+import axios from 'axios'
+import type { Device, Alarm, User, FavoriteItem, FavoriteRegister } from '../types'
 
-const FAVORITES_KEY = 'modbus_favorites'
-
-function loadFavorites(): FavoriteItem[] {
-  try {
-    const raw = localStorage.getItem(FAVORITES_KEY)
-    return raw ? JSON.parse(raw) : []
-  } catch {
-    return []
-  }
-}
-
-function saveFavorites(items: FavoriteItem[]) {
-  localStorage.setItem(FAVORITES_KEY, JSON.stringify(items))
-}
+const API_BASE = '/api/favorites'
+const LAST_USER_KEY = 'modbus_last_user'
 
 export const useModbusStore = defineStore('modbus', () => {
   const devices = ref<Device[]>([])
@@ -24,15 +13,18 @@ export const useModbusStore = defineStore('modbus', () => {
   const isPolling = ref(false)
   const pollInterval = ref(1000)
   const selectedDevice = ref<Device | null>(null)
-  const favorites = ref<FavoriteItem[]>(loadFavorites())
 
-  watch(favorites, (val) => saveFavorites(val), { deep: true })
+  const users = ref<User[]>([])
+  const currentUser = ref<User | null>(null)
+  const favorites = ref<FavoriteItem[]>([])
+  const favoritesLoaded = ref(false)
 
   const criticalAlarms = computed(() => alarms.value.filter(a => a.level === 'critical' && !a.acknowledged))
   const onlineDevices = computed(() => devices.value.filter(d => d.online))
 
   const favoriteRegisters = computed<FavoriteRegister[]>(() => {
-    return favorites.value.map(fav => {
+    const sorted = [...favorites.value].sort((a, b) => a.order - b.order)
+    return sorted.map(fav => {
       const dev = devices.value.find(d => d.id === fav.deviceId)
       const reg = dev?.registers.find(r => r.address === fav.address)
       if (!dev || !reg) return null
@@ -44,6 +36,99 @@ export const useModbusStore = defineStore('modbus', () => {
       }
     }).filter((r): r is FavoriteRegister => r !== null)
   })
+
+  function mapUser(raw: any): User {
+    return { userId: raw.user_id, displayName: raw.display_name, role: raw.role }
+  }
+
+  function mapFavorite(raw: any): FavoriteItem {
+    return { userId: raw.user_id, deviceId: raw.device_id, address: raw.address, order: raw.order ?? 0 }
+  }
+
+  async function fetchUsers() {
+    try {
+      const { data } = await axios.get(`${API_BASE}/users`)
+      users.value = (data as any[]).map(mapUser)
+      const lastUserId = localStorage.getItem(LAST_USER_KEY)
+      if (lastUserId) {
+        const found = users.value.find(u => u.userId === lastUserId)
+        if (found) await selectUser(found)
+      }
+    } catch {
+      users.value = []
+    }
+  }
+
+  async function selectUser(user: User) {
+    currentUser.value = user
+    localStorage.setItem(LAST_USER_KEY, user.userId)
+    await fetchFavorites()
+  }
+
+  async function fetchFavorites() {
+    if (!currentUser.value) { favorites.value = []; return }
+    try {
+      const { data } = await axios.get(`${API_BASE}/${currentUser.value.userId}`)
+      favorites.value = (data as any[]).map(mapFavorite).sort((a, b) => a.order - b.order)
+      favoritesLoaded.value = true
+    } catch {
+      favorites.value = []
+    }
+  }
+
+  function isFavorite(deviceId: string, address: number): boolean {
+    return favorites.value.some(f => f.deviceId === deviceId && f.address === address)
+  }
+
+  async function addFavorite(deviceId: string, address: number) {
+    if (!currentUser.value || isFavorite(deviceId, address)) return
+    try {
+      const { data } = await axios.post(API_BASE, {
+        user_id: currentUser.value.userId,
+        device_id: deviceId,
+        address,
+      })
+      favorites.value.push(mapFavorite(data))
+    } catch { /* noop */ }
+  }
+
+  async function removeFavorite(deviceId: string, address: number) {
+    if (!currentUser.value) return
+    try {
+      await axios.delete(`${API_BASE}/${currentUser.value.userId}/${deviceId}/${address}`)
+      const idx = favorites.value.findIndex(f => f.deviceId === deviceId && f.address === address)
+      if (idx !== -1) favorites.value.splice(idx, 1)
+    } catch { /* noop */ }
+  }
+
+  async function toggleFavorite(deviceId: string, address: number) {
+    if (isFavorite(deviceId, address)) {
+      await removeFavorite(deviceId, address)
+    } else {
+      await addFavorite(deviceId, address)
+    }
+  }
+
+  async function moveFavorite(deviceId: string, address: number, direction: -1 | 1) {
+    if (!currentUser.value) return
+    try {
+      await axios.put(`${API_BASE}/reorder`, {
+        user_id: currentUser.value.userId,
+        device_id: deviceId,
+        address,
+        direction,
+      })
+      await fetchFavorites()
+    } catch { /* noop */ }
+  }
+
+  async function clearFavorites() {
+    if (!currentUser.value) return
+    try {
+      await axios.delete(`${API_BASE}/${currentUser.value.userId}`)
+      favorites.value = []
+    } catch { /* noop */ }
+  }
 
   function initMockDevices() {
     devices.value = [
@@ -97,7 +182,6 @@ export const useModbusStore = defineStore('modbus', () => {
             historyData.value[key].time.shift()
             historyData.value[key].values.shift()
           }
-          // Check thresholds
           if (reg.name === '温度' && reg.value > 28) {
             alarms.value.unshift({
               id: `a_${Date.now()}`, deviceId: dev.id, register: reg.name,
@@ -117,40 +201,6 @@ export const useModbusStore = defineStore('modbus', () => {
     if (a) a.acknowledged = true
   }
 
-  function isFavorite(deviceId: string, address: number): boolean {
-    return favorites.value.some(f => f.deviceId === deviceId && f.address === address)
-  }
-
-  function addFavorite(deviceId: string, address: number) {
-    if (isFavorite(deviceId, address)) return
-    favorites.value.push({ deviceId, address, addedAt: Date.now() })
-  }
-
-  function removeFavorite(deviceId: string, address: number) {
-    const idx = favorites.value.findIndex(f => f.deviceId === deviceId && f.address === address)
-    if (idx !== -1) favorites.value.splice(idx, 1)
-  }
-
-  function toggleFavorite(deviceId: string, address: number) {
-    if (isFavorite(deviceId, address)) {
-      removeFavorite(deviceId, address)
-    } else {
-      addFavorite(deviceId, address)
-    }
-  }
-
-  function moveFavorite(deviceId: string, address: number, direction: -1 | 1) {
-    const idx = favorites.value.findIndex(f => f.deviceId === deviceId && f.address === address)
-    const target = idx + direction
-    if (idx === -1 || target < 0 || target >= favorites.value.length) return
-    const arr = favorites.value
-    ;[arr[idx], arr[target]] = [arr[target], arr[idx]]
-  }
-
-  function clearFavorites() {
-    favorites.value = []
-  }
-
   function toggleDevice(id: string) {
     const d = devices.value.find(d => d.id === id)
     if (d) d.online = !d.online
@@ -158,9 +208,10 @@ export const useModbusStore = defineStore('modbus', () => {
 
   return {
     devices, alarms, historyData, isPolling, pollInterval, selectedDevice,
-    favorites, favoriteRegisters,
+    users, currentUser, favorites, favoritesLoaded, favoriteRegisters,
     criticalAlarms, onlineDevices,
     initMockDevices, simulatePoll, acknowledgeAlarm, toggleDevice,
+    fetchUsers, selectUser, fetchFavorites,
     isFavorite, addFavorite, removeFavorite, toggleFavorite, moveFavorite, clearFavorites
   }
 })
